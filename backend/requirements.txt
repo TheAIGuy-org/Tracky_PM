@@ -1,0 +1,33 @@
+# Tracky PM Backend - Python Dependencies
+# ==========================================
+
+# Core Framework
+fastapi
+uvicorn[standard]
+
+# Data Validation
+pydantic
+pydantic-settings
+
+# Database
+supabase
+# Excel Processing
+pandas
+openpyxl
+xlrd
+
+# HTTP Client (for Supabase)
+httpx
+
+# Environment Management
+python-dotenv
+
+# File Upload Support
+python-multipart
+
+# Utilities
+python-dateutil
+# Development Dependencies (optional)
+# pytest
+# pytest-asyncio
+# httpx  # for TestClient
