@@ -11,6 +11,7 @@ pydantic-settings
 
 # Database
 supabase
+
 # Excel Processing
 pandas
 openpyxl
@@ -27,6 +28,20 @@ python-multipart
 
 # Utilities
 python-dateutil
+pytz
+
+# JWT for Magic Links
+PyJWT
+
+# Background Job Scheduler
+apscheduler>=3.10.0
+
+# Email & Templating
+jinja2>=3.1.0
+
+# Email Service (optional - for SendGrid support)
+# sendgrid  # Uncomment if using SendGrid
+
 # Development Dependencies (optional)
 # pytest
 # pytest-asyncio

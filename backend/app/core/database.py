@@ -11,7 +11,7 @@ Features:
 """
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from functools import lru_cache
 from typing import Any, Generator, Optional
 from uuid import UUID, uuid4
@@ -188,7 +188,8 @@ class SupabaseClient:
     
     def update_import_batch(self, batch_id: str, update_data: dict) -> dict:
         """Update import batch with results."""
-        update_data["completed_at"] = datetime.utcnow().isoformat()
+        # CRIT_004: Use timezone-aware datetime
+        update_data["completed_at"] = datetime.now(timezone.utc).isoformat()
         response = self.client.table("import_batches").update(update_data).eq("id", batch_id).execute()
         return response.data[0] if response.data else {}
     

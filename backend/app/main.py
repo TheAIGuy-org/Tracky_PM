@@ -5,8 +5,12 @@ This is the Ingestion Engine backend service that handles:
 - Excel file parsing and validation
 - Smart Merge algorithm for data synchronization
 - Database operations via Supabase
+- Proactive Execution Tracking Loop (alerts, escalations)
+- Background job scheduling
 """
+import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +18,21 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.exceptions import TrackyException
-from app.api.routes import import_router
+from app.api.routes import (
+    import_router, 
+    data_router, 
+    alert_router,
+    holiday_router,
+    resource_router
+)
+
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG if settings.debug else logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -25,18 +43,46 @@ async def lifespan(app: FastAPI):
     Startup:
     - Initialize database connections
     - Validate configuration
+    - Start background scheduler
     
     Shutdown:
+    - Stop scheduler gracefully
     - Clean up resources
     """
     # Startup
-    print(f"Starting {settings.app_name} v{settings.app_version}")
-    print(f"Debug mode: {settings.debug}")
+    logger.info(f"🚀 Starting {settings.app_name} v{settings.app_version}")
+    logger.info(f"Debug mode: {settings.debug}")
+    logger.info(f"Email enabled: {settings.email_enabled}")
+    logger.info(f"Scheduler enabled: {settings.enable_scheduler}")
+    logger.info(f"Run scheduler (this instance): {settings.run_scheduler}")
+    
+    # Initialize scheduler reference in app state
+    app.state.scheduler = None
+    
+    # CRITICAL FIX (A): Only start scheduler if BOTH enabled AND run_scheduler is true
+    # This prevents duplicate emails when running multiple workers (gunicorn -w 4)
+    # Set RUN_SCHEDULER=true on only ONE worker/container in production
+    should_run_scheduler = settings.enable_scheduler and settings.run_scheduler
+    
+    if should_run_scheduler:
+        try:
+            from app.services.scheduler import get_scheduler
+            app.state.scheduler = get_scheduler()
+            app.state.scheduler.start()
+            logger.info("✅ Background scheduler started")
+        except ImportError as e:
+            logger.warning(f"⚠️ Scheduler not available (missing APScheduler?): {e}")
+        except Exception as e:
+            logger.error(f"❌ Failed to start scheduler: {e}")
     
     yield
     
     # Shutdown
-    print("Shutting down...")
+    if app.state.scheduler and app.state.scheduler.is_running:
+        app.state.scheduler.stop()
+        logger.info("✅ Scheduler stopped")
+    
+    logger.info("👋 Shutting down...")
 
 
 # Create FastAPI application
@@ -106,6 +152,10 @@ async def tracky_exception_handler(request, exc: TrackyException):
 
 # Include API routers
 app.include_router(import_router)
+app.include_router(data_router)
+app.include_router(alert_router)
+app.include_router(holiday_router)
+app.include_router(resource_router)
 
 
 # Health check endpoint
@@ -114,13 +164,46 @@ async def health_check():
     """
     Health check endpoint for monitoring.
     
-    Returns service status and configuration.
+    Returns service status, scheduler health, and configuration.
     """
+    scheduler = getattr(app.state, 'scheduler', None)
+    
+    scheduler_status = {
+        "running": scheduler.is_running if scheduler else False,
+        "jobs": [],
+        "failed_jobs": {}
+    }
+    
+    if scheduler and scheduler.is_running:
+        scheduler_status["jobs"] = [
+            {
+                "id": job.id,
+                "name": job.name,
+                "next_run": str(job.next_run_time) if job.next_run_time else None
+            }
+            for job in scheduler.scheduler.get_jobs()
+        ]
+        scheduler_status["failed_jobs"] = {
+            job_id: {
+                "count": len(failures),
+                "last_failure": str(failures[-1]["timestamp"]) if failures else None
+            }
+            for job_id, failures in scheduler.monitor.failed_jobs.items()
+        }
+    
+    # Determine overall health
+    failed_job_count = sum(
+        len(failures) for failures in scheduler_status.get("failed_jobs", {}).values()
+    )
+    overall_status = "healthy" if failed_job_count < 5 else "degraded"
+    
     return {
-        "status": "healthy",
+        "status": overall_status,
         "service": settings.app_name,
         "version": settings.app_version,
         "debug": settings.debug,
+        "scheduler": scheduler_status,
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
