@@ -6,6 +6,10 @@ Provides endpoints for managing resources including:
 - Backup resource assignment
 - Availability status
 - Escalation chain preview
+
+IMPORTANT: Route ordering matters in FastAPI!
+Specific paths like /hierarchy/tree must be defined BEFORE
+parameterized paths like /{resource_id}
 """
 from datetime import date, datetime, timezone
 from typing import Optional, List
@@ -68,7 +72,58 @@ class SetAvailabilityRequest(BaseModel):
 
 
 # ==========================================
-# RESOURCE LIST & DETAILS
+# SPECIFIC PATH ROUTES (MUST BE BEFORE /{resource_id})
+# ==========================================
+
+@router.get(
+    "/hierarchy/tree",
+    summary="Get Manager Hierarchy Tree",
+    description="Get the complete manager hierarchy as a tree"
+)
+async def get_hierarchy_tree() -> dict:
+    """Get the complete manager hierarchy."""
+    db = get_supabase_client()
+    
+    # Get all resources
+    response = db.client.table("resources").select(
+        "id, external_id, name, email, role, manager_id, availability_status"
+    ).execute()
+    
+    resources = response.data or []
+    
+    # Build tree
+    resource_map = {r["id"]: r for r in resources}
+    roots = []
+    
+    for resource in resources:
+        resource["children"] = []
+        resource["depth"] = 0
+    
+    for resource in resources:
+        manager_id = resource.get("manager_id")
+        if manager_id and manager_id in resource_map:
+            resource_map[manager_id]["children"].append(resource)
+        else:
+            roots.append(resource)
+    
+    # Calculate depths
+    def set_depth(node, depth=0):
+        node["depth"] = depth
+        for child in node.get("children", []):
+            set_depth(child, depth + 1)
+    
+    for root in roots:
+        set_depth(root)
+    
+    return {
+        "roots": roots,
+        "total_resources": len(resources),
+        "resources_without_manager": len(roots)
+    }
+
+
+# ==========================================
+# RESOURCE LIST (No path parameter)
 # ==========================================
 
 @router.get(
@@ -85,37 +140,44 @@ async def list_resources(
     offset: int = Query(0, ge=0)
 ) -> dict:
     """List resources with optional filters."""
-    db = get_supabase_client()
-    
-    query = db.client.table("resources").select(
-        "id, external_id, name, email, role, department, "
-        "manager_id, backup_resource_id, availability_status, "
-        "leave_start_date, leave_end_date, timezone, "
-        "preferred_notification_channel, created_at"
-    )
-    
-    if search:
-        query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%")
-    
-    if availability_status:
-        query = query.eq("availability_status", availability_status)
-    
-    if has_manager is not None:
-        if has_manager:
-            query = query.not_.is_("manager_id", "null")
-        else:
-            query = query.is_("manager_id", "null")
-    
-    if manager_id:
-        query = query.eq("manager_id", manager_id)
-    
-    response = query.order("name").range(offset, offset + limit - 1).execute()
-    
-    return {
-        "resources": response.data or [],
-        "count": len(response.data or [])
-    }
+    try:
+        db = get_supabase_client()
+        
+        query = db.client.table("resources").select(
+            "id, external_id, name, email, role, "
+            "manager_id, backup_resource_id, availability_status, "
+            "leave_start_date, leave_end_date, timezone, "
+            "preferred_notification_channel, created_at"
+        )
+        
+        if search:
+            query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%")
+        
+        if availability_status:
+            query = query.eq("availability_status", availability_status)
+        
+        if has_manager is not None:
+            if has_manager:
+                query = query.not_.is_("manager_id", "null")
+            else:
+                query = query.is_("manager_id", "null")
+        
+        if manager_id:
+            query = query.eq("manager_id", manager_id)
+        
+        response = query.order("name").range(offset, offset + limit - 1).execute()
+        
+        return {
+            "resources": response.data or [],
+            "count": len(response.data or [])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
 
+
+# ==========================================
+# RESOURCE CRUD WITH PATH PARAMETER (MUST BE AFTER SPECIFIC ROUTES)
+# ==========================================
 
 @router.get(
     "/{resource_id}",
@@ -125,6 +187,12 @@ async def list_resources(
 async def get_resource(resource_id: str = Path(...)) -> dict:
     """Get a resource by ID with manager and backup info."""
     db = get_supabase_client()
+    
+    # Validate UUID format to give better error message
+    try:
+        UUID(resource_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid resource ID format. Must be a valid UUID.")
     
     response = db.client.table("resources").select(
         "*, "
@@ -159,6 +227,12 @@ async def update_resource(
 ) -> dict:
     """Update a resource."""
     db = get_supabase_client()
+    
+    # Validate UUID format
+    try:
+        UUID(resource_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid resource ID format. Must be a valid UUID.")
     
     # Check if exists
     existing = db.client.table("resources").select("id").eq(
@@ -467,57 +541,6 @@ async def get_resource_escalation_chain(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==========================================
-# MANAGER HIERARCHY TREE
-# ==========================================
-
-@router.get(
-    "/hierarchy/tree",
-    summary="Get Manager Hierarchy Tree",
-    description="Get the complete manager hierarchy as a tree"
-)
-async def get_hierarchy_tree() -> dict:
-    """Get the complete manager hierarchy."""
-    db = get_supabase_client()
-    
-    # Get all resources
-    response = db.client.table("resources").select(
-        "id, external_id, name, email, role, manager_id, availability_status"
-    ).execute()
-    
-    resources = response.data or []
-    
-    # Build tree
-    resource_map = {r["id"]: r for r in resources}
-    roots = []
-    
-    for resource in resources:
-        resource["children"] = []
-        resource["depth"] = 0
-    
-    for resource in resources:
-        manager_id = resource.get("manager_id")
-        if manager_id and manager_id in resource_map:
-            resource_map[manager_id]["children"].append(resource)
-        else:
-            roots.append(resource)
-    
-    # Calculate depths
-    def set_depth(node, depth=0):
-        node["depth"] = depth
-        for child in node.get("children", []):
-            set_depth(child, depth + 1)
-    
-    for root in roots:
-        set_depth(root)
-    
-    return {
-        "roots": roots,
-        "total_resources": len(resources),
-        "resources_without_manager": len(roots)
-    }
 
 
 @router.get(

@@ -186,9 +186,9 @@ async def health_check():
         scheduler_status["failed_jobs"] = {
             job_id: {
                 "count": len(failures),
-                "last_failure": str(failures[-1]["timestamp"]) if failures else None
+                "last_failure": str(failures[-1]) if failures else None
             }
-            for job_id, failures in scheduler.monitor.failed_jobs.items()
+            for job_id, failures in scheduler.job_monitor.failed_jobs.items()
         }
     
     # Determine overall health

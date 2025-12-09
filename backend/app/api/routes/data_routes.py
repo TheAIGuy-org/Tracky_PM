@@ -205,50 +205,55 @@ async def get_work_item(work_item_id: str) -> dict:
     """
     Get work item with full details including dependencies.
     """
-    db = get_supabase_client()
-    
-    response = (
-        db.client.table("work_items")
-        .select("*, phases(*, projects(*, programs(*)))")
-        .eq("id", work_item_id)
-        .execute()
-    )
-    
-    if not response.data:
-        raise HTTPException(status_code=404, detail="Work item not found")
-    
-    work_item = response.data[0]
-    
-    # Get dependencies (as successor)
-    predecessors = (
-        db.client.table("dependencies")
-        .select("*, predecessor:predecessor_id(id, external_id, name, status)")
-        .eq("successor_id", work_item_id)
-        .execute()
-    )
-    work_item["predecessors"] = predecessors.data or []
-    
-    # Get dependencies (as predecessor)
-    successors = (
-        db.client.table("dependencies")
-        .select("*, successor:successor_id(id, external_id, name, status)")
-        .eq("predecessor_id", work_item_id)
-        .execute()
-    )
-    work_item["successors"] = successors.data or []
-    
-    # Get resource info
-    if work_item.get("resource_id"):
-        resource_response = (
-            db.client.table("resources")
-            .select("*")
-            .eq("id", work_item["resource_id"])
+    try:
+        db = get_supabase_client()
+        
+        response = (
+            db.client.table("work_items")
+            .select("*, phases(*, projects(*, programs(*)))")
+            .eq("id", work_item_id)
             .execute()
         )
-        if resource_response.data:
-            work_item["resource"] = resource_response.data[0]
-    
-    return work_item
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Work item not found")
+        
+        work_item = response.data[0]
+        
+        # Get dependencies (as successor)
+        predecessors = (
+            db.client.table("dependencies")
+            .select("*, predecessor:predecessor_item_id(id, external_id, name, status)")
+            .eq("successor_item_id", work_item_id)
+            .execute()
+        )
+        work_item["predecessors"] = predecessors.data or []
+        
+        # Get dependencies (as predecessor)
+        successors = (
+            db.client.table("dependencies")
+            .select("*, successor:successor_item_id(id, external_id, name, status)")
+            .eq("predecessor_item_id", work_item_id)
+            .execute()
+        )
+        work_item["successors"] = successors.data or []
+        
+        # Get resource info
+        if work_item.get("resource_id"):
+            resource_response = (
+                db.client.table("resources")
+                .select("*")
+                .eq("id", work_item["resource_id"])
+                .execute()
+            )
+            if resource_response.data:
+                work_item["resource"] = resource_response.data[0]
+        
+        return work_item
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
 
 
 # ==========================================
@@ -411,30 +416,35 @@ async def list_dependencies(
     """
     List dependencies with work item info.
     """
-    db = get_supabase_client()
-    
-    query = db.client.table("dependencies").select(
-        "*, predecessor:predecessor_id(id, external_id, name), successor:successor_id(id, external_id, name)"
-    )
-    
-    if work_item_id:
-        query = query.or_(f"predecessor_id.eq.{work_item_id},successor_id.eq.{work_item_id}")
-    
-    query = query.range(offset, offset + limit - 1)
-    response = query.execute()
-    
-    # Get total count
-    count_query = db.client.table("dependencies").select("id", count="exact")
-    if work_item_id:
-        count_query = count_query.or_(f"predecessor_id.eq.{work_item_id},successor_id.eq.{work_item_id}")
-    count_response = count_query.execute()
-    
-    return {
-        "data": response.data or [],
-        "count": count_response.count or 0,
-        "limit": limit,
-        "offset": offset
-    }
+    try:
+        db = get_supabase_client()
+        
+        # FIXED: Correct column names are predecessor_item_id and successor_item_id
+        query = db.client.table("dependencies").select(
+            "*, predecessor:predecessor_item_id(id, external_id, name), successor:successor_item_id(id, external_id, name)"
+        )
+        
+        if work_item_id:
+            # FIXED: Use correct column names
+            query = query.or_(f"predecessor_item_id.eq.{work_item_id},successor_item_id.eq.{work_item_id}")
+        
+        query = query.range(offset, offset + limit - 1)
+        response = query.execute()
+        
+        # Get total count
+        count_query = db.client.table("dependencies").select("id", count="exact")
+        if work_item_id:
+            count_query = count_query.or_(f"predecessor_item_id.eq.{work_item_id},successor_item_id.eq.{work_item_id}")
+        count_response = count_query.execute()
+        
+        return {
+            "data": response.data or [],
+            "count": count_response.count or 0,
+            "limit": limit,
+            "offset": offset
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
 
 
 # ==========================================

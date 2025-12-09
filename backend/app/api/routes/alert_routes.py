@@ -849,6 +849,44 @@ async def list_alerts(
 
 
 @router.get(
+    "/responses",
+    summary="List Responses",
+    description="Get status responses with filtering"
+)
+async def list_responses(
+    work_item_id: Optional[str] = Query(None),
+    reported_status: Optional[str] = Query(None),
+    approval_status: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0)
+) -> dict:
+    """List status responses."""
+    db = get_supabase_client()
+    
+    query = db.client.table("work_item_responses").select(
+        "*, work_items(external_id, name), resources:responder_resource_id(name)"
+    )
+    
+    if work_item_id:
+        query = query.eq("work_item_id", work_item_id)
+    if reported_status:
+        query = query.eq("reported_status", reported_status)
+    if approval_status:
+        query = query.eq("approval_status", approval_status)
+    
+    response = query.order("created_at", desc=True).range(
+        offset, offset + limit - 1
+    ).execute()
+    
+    return {
+        "data": response.data or [],
+        "count": len(response.data or []),
+        "limit": limit,
+        "offset": offset
+    }
+
+
+@router.get(
     "/{alert_id}",
     summary="Get Alert Details",
     description="Get detailed information about a specific alert"
@@ -1015,43 +1053,3 @@ async def preview_pending_checks(
     }
 
 
-# ==========================================
-# RESPONSE HISTORY ENDPOINTS
-# ==========================================
-
-@router.get(
-    "/responses",
-    summary="List Responses",
-    description="Get status responses with filtering"
-)
-async def list_responses(
-    work_item_id: Optional[str] = Query(None),
-    reported_status: Optional[str] = Query(None),
-    approval_status: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0)
-) -> dict:
-    """List status responses."""
-    db = get_supabase_client()
-    
-    query = db.client.table("work_item_responses").select(
-        "*, work_items(external_id, name), resources:responder_resource_id(name)"
-    )
-    
-    if work_item_id:
-        query = query.eq("work_item_id", work_item_id)
-    if reported_status:
-        query = query.eq("reported_status", reported_status)
-    if approval_status:
-        query = query.eq("approval_status", approval_status)
-    
-    response = query.order("created_at", desc=True).range(
-        offset, offset + limit - 1
-    ).execute()
-    
-    return {
-        "data": response.data or [],
-        "count": len(response.data or []),
-        "limit": limit,
-        "offset": offset
-    }
